@@ -1,7 +1,7 @@
-mod pose;
-mod space;
-mod atom;
-mod ligand;
-mod receptor;
+pub mod pose;
+pub mod space;
+pub mod atom;
+pub mod ligand;
+pub mod receptor;
 mod test;
-mod spatial_grid;
+pub mod spatial_grid;

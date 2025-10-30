@@ -8,6 +8,7 @@
 use nalgebra::Vector3;
 use crate::core::atom::Atom;
 
+#[derive(Clone)]
 pub struct Bond {
     pub(crate) target: usize,
     pub(crate) is_rotatable: bool,

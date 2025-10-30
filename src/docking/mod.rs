@@ -4,8 +4,7 @@
 /// how small molecules (ligands) bind to proteins (receptors).
 
 pub mod tests;
-
-// TODO: Add docking algorithm modules here
+pub mod scoring;
+pub mod search;
 // pub mod algorithm;
-// pub mod scoring;
 // pub mod search;

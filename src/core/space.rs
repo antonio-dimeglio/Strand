@@ -9,33 +9,35 @@
 use nalgebra::{Point3, Vector3};
 
 pub struct Boundaries {
-    center: Point3<f32>,
-    extents: Vector3<f32> // +- dx, +- dy, +- dz
+    pub center: Point3<f32>,
+    pub extents: Vector3<f32> // +- dx, +- dy, +- dz
 }
 
+#[derive(PartialEq, Clone)]
 pub struct RotationConstraints {
-    roll_range: Option<(f32, f32)>,   // None = no constraint on this axis
-    pitch_range: Option<(f32, f32)>,
-    yaw_range: Option<(f32, f32)>,
+    pub roll_range: Option<(f32, f32)>,   // None = no constraint on this axis
+    pub pitch_range: Option<(f32, f32)>,
+    pub yaw_range: Option<(f32, f32)>,
 }
 
+#[derive(PartialEq, Clone)]
 pub enum RotationalSpace {
     Constrained(RotationConstraints),
     Unconstrained
 }
 
 pub struct RotatableBond {
-    atom1_idx: usize,
-    atom2_idx: usize,
-    angle_range: (f32, f32)
+    pub atom1_idx: usize,
+    pub atom2_idx: usize,
+    pub angle_range: (f32, f32)
 }
 pub struct ConformationalSpace {
     // Which bonds are rotatable in a ligand?
-    rotatable_bonds: Vec<RotatableBond>
+    pub rotatable_bonds: Vec<RotatableBond>
 }
 
 pub struct Space {
-    spatial_boundaries: Boundaries,
-    rotational_space: RotationalSpace,
-    conformational_space: ConformationalSpace
+    pub spatial_boundaries: Boundaries,
+    pub rotational_space: RotationalSpace,
+    pub conformational_space: ConformationalSpace
 }

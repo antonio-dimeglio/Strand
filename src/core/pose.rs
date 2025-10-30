@@ -15,10 +15,42 @@
 
 use std::collections::HashSet;
 use nalgebra::{DVector, Rotation3, Translation3, UnitQuaternion, UnitVector3, Vector3};
+use rand::{thread_rng, Rng};
+use rand_distr::{Distribution, Normal};
+use crate::core::space::RotationalSpace;
 use crate::core::ligand::{Ligand};
+use crate::core::space::{Boundaries, ConformationalSpace, Space};
 
 type Coordinates = Vec<Vector3<f32>>;
 
+/// Step sizes for pose perturbation in Monte Carlo search
+pub struct StepSizes {
+    pub translation: f32,        // Step size in Angstroms
+    pub rotation_degrees: f32,   // Step size in degrees
+    pub torsion_degrees: f32,    // Step size in degrees for torsion angles
+}
+
+impl StepSizes {
+    /// Default step sizes optimized for typical docking scenarios
+    pub fn default() -> Self {
+        StepSizes {
+            translation: 1.0,      // 1.0 Å
+            rotation_degrees: 20.0, // 20°
+            torsion_degrees: 20.0,  // 20°
+        }
+    }
+
+    /// Create custom step sizes
+    pub fn new(translation: f32, rotation_degrees: f32, torsion_degrees: f32) -> Self {
+        StepSizes {
+            translation,
+            rotation_degrees,
+            torsion_degrees,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Pose {
     translation: Translation3<f32>,
     rotation: UnitQuaternion<f32>,
@@ -26,8 +58,202 @@ pub struct Pose {
     energy: f32,  // binding energy
     rmsd: Option<f32>,  // RMSD from reference
 }
-impl Pose {
 
+impl Pose {
+    fn sample_angle(rng: &mut impl Rng, range: Option<(f32, f32)>) -> f32 {
+        match range {
+            Some((min, max)) => rng.gen_range(min..max),
+            None => rng.gen_range(0.0..2.0 * std::f32::consts::PI),
+        }
+    }
+
+    pub fn generate_random_translation(boundaries: &Boundaries) -> Translation3<f32> {
+        let center = boundaries.center;
+        let extents = boundaries.extents;
+        let mut rng = thread_rng();
+
+        let random_x = center.x + rng.gen_range(-extents.x..extents.x);
+        let random_y = center.y + rng.gen_range(-extents.y..extents.y);
+        let random_z = center.z + rng.gen_range(-extents.z..extents.z);
+
+        Translation3::new(random_x, random_y, random_z)
+    }
+
+    pub fn generate_random_rotation(rotation: &RotationalSpace) -> UnitQuaternion<f32>{
+        let mut rng = thread_rng();
+
+        match rotation {
+            RotationalSpace::Unconstrained => {
+                // Sample 4D unit sphere via Gaussian method
+                let q = nalgebra::Quaternion::new(
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+
+                );
+                UnitQuaternion::from_quaternion(q)
+            }
+            RotationalSpace::Constrained(constraints) => {
+                let roll = Self::sample_angle(&mut rng, constraints.roll_range);
+                let pitch = Self::sample_angle(&mut rng, constraints.pitch_range);
+                let yaw = Self::sample_angle(&mut rng, constraints.yaw_range);
+
+                UnitQuaternion::from_euler_angles(roll, pitch, yaw)
+            }
+        }
+    }
+
+    pub fn generate_random_conformation(conformational_space: &ConformationalSpace) -> DVector<f32> {
+        let mut conformation = DVector::zeros(conformational_space.rotatable_bonds.len());
+        let mut rng = thread_rng();
+
+        for (i, bond) in conformational_space.rotatable_bonds.iter().enumerate() {
+            let min_angle = bond.angle_range.0;
+            let max_angle = bond.angle_range.1;
+            conformation[i] = rng.gen_range(min_angle..max_angle);
+        }
+        return conformation
+    }
+    pub fn random_pose(space: &Space, _ligand: &Ligand) -> Pose {
+        let translation = Pose::generate_random_translation(&space.spatial_boundaries);
+        let rotation = Pose::generate_random_rotation(&space.rotational_space);
+        let conformation = Pose::generate_random_conformation(&space.conformational_space);
+
+        Pose {
+            translation,
+            rotation,
+            conformation,
+            energy: 0.0,
+            rmsd: None
+        }
+    }
+
+    /// Generate a random unit vector uniformly distributed on the unit sphere
+    /// Uses normal distribution to ensure uniform sampling
+    fn random_unit_vector() -> UnitVector3<f32> {
+        let mut rng = thread_rng();
+        let normal = Normal::new(0.0, 1.0).unwrap();
+
+        let x = normal.sample(&mut rng);
+        let y = normal.sample(&mut rng);
+        let z = normal.sample(&mut rng);
+
+        UnitVector3::new_normalize(Vector3::new(x, y, z))
+    }
+
+    /// Perturb translation by a small random displacement
+    fn perturb_translation(
+        current: &Translation3<f32>,
+        boundaries: &Boundaries,
+        step_size: f32
+    ) -> Translation3<f32> {
+        let mut rng = thread_rng();
+
+        // Random displacement in each dimension
+        let dx = rng.gen_range(-step_size..step_size);
+        let dy = rng.gen_range(-step_size..step_size);
+        let dz = rng.gen_range(-step_size..step_size);
+
+        let new_x = current.vector.x + dx;
+        let new_y = current.vector.y + dy;
+        let new_z = current.vector.z + dz;
+
+        // Clamp to boundaries
+        let center = boundaries.center;
+        let extents = boundaries.extents;
+
+        let clamped_x = new_x.clamp(center.x - extents.x, center.x + extents.x);
+        let clamped_y = new_y.clamp(center.y - extents.y, center.y + extents.y);
+        let clamped_z = new_z.clamp(center.z - extents.z, center.z + extents.z);
+
+        Translation3::new(clamped_x, clamped_y, clamped_z)
+    }
+
+    /// Perturb rotation by applying a small random rotation
+    fn perturb_rotation(
+        current: &UnitQuaternion<f32>,
+        max_angle_degrees: f32
+    ) -> UnitQuaternion<f32> {
+        let mut rng = thread_rng();
+
+        // Random axis
+        let random_axis = Self::random_unit_vector();
+
+        // Random angle in range [-max_angle, +max_angle]
+        let angle_degrees = rng.gen_range(-max_angle_degrees..max_angle_degrees);
+        let angle_radians = angle_degrees.to_radians();
+
+        // Create small rotation
+        let small_rotation = UnitQuaternion::from_axis_angle(&random_axis, angle_radians);
+
+        // Compose with current rotation
+        small_rotation * current
+    }
+
+    /// Perturb conformation by adjusting one or more torsion angles
+    fn perturb_conformation(
+        current: &DVector<f32>,
+        conformational_space: &ConformationalSpace,
+        max_angle_degrees: f32
+    ) -> DVector<f32> {
+        let mut rng = thread_rng();
+        let mut new_conformation = current.clone();
+
+        if conformational_space.rotatable_bonds.is_empty() {
+            return new_conformation;
+        }
+
+        // Randomly select one torsion angle to perturb
+        let bond_idx = rng.gen_range(0..conformational_space.rotatable_bonds.len());
+        let bond = &conformational_space.rotatable_bonds[bond_idx];
+
+        // Random angle change
+        let angle_delta = rng.gen_range(-max_angle_degrees..max_angle_degrees);
+        let angle_delta_radians = angle_delta.to_radians();
+
+        // Apply perturbation
+        new_conformation[bond_idx] += angle_delta_radians;
+
+        // Clamp to bond's allowed range
+        let min_angle = bond.angle_range.0;
+        let max_angle = bond.angle_range.1;
+        new_conformation[bond_idx] = new_conformation[bond_idx].clamp(min_angle, max_angle);
+
+        new_conformation
+    }
+
+    /// Perturb the current pose by making small random changes to translation, rotation, and conformation
+    /// Returns a new perturbed pose
+    pub fn perturb(&self, space: &Space, step_sizes: &StepSizes) -> Pose {
+        let new_translation = Self::perturb_translation(
+            &self.translation,
+            &space.spatial_boundaries,
+            step_sizes.translation
+        );
+
+        let new_rotation = Self::perturb_rotation(
+            &self.rotation,
+            step_sizes.rotation_degrees
+        );
+
+        let new_conformation = Self::perturb_conformation(
+            &self.conformation,
+            &space.conformational_space,
+            step_sizes.torsion_degrees
+        );
+
+        Pose {
+            translation: new_translation,
+            rotation: new_rotation,
+            conformation: new_conformation,
+            energy: 0.0,
+            rmsd: None
+        }
+    }
+
+    /// DFS algorithm to explore the ligand molecule and find atoms that are effected downstream
+    /// by rotation of a bond
     fn find_atoms_downstream(&self, ligand: &Ligand, bond: (usize, usize)) -> Vec<usize> {
         let mut visited: HashSet<usize> = HashSet::new();
         let mut queue = Vec::new();

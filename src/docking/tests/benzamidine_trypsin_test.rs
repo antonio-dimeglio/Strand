@@ -489,50 +489,184 @@ pub fn create_benzamidine_trypsin_request() -> DockingRequest {
     }
 }
 
-/// Test runner for benzamidine-trypsin docking
-/// Expected result: Benzamidine binds in S1 pocket with amidinium group
-/// forming salt bridge with Asp189 carboxylate
+use crate::core::atom::{Atom as CoreAtom, AtomType, HydrogenBond};
+use crate::core::ligand::{Ligand, Bond};
+use crate::core::receptor::Receptor;
+use crate::core::space::{Space, Boundaries, RotationalSpace, ConformationalSpace};
+use crate::core::pose::StepSizes;
+use crate::docking::search::{random_search, mc_simulated_annealing};
+use nalgebra::{Point3, Vector3};
+
+/// Convert server Atom to core Atom
+fn convert_atom(server_atom: &Atom) -> CoreAtom {
+    let atom_type = AtomType {
+        vdw_radius: match server_atom.element.as_str() {
+            "C" => 1.70,
+            "N" => 1.55,
+            "O" => 1.52,
+            "H" => 1.20,
+            _ => 1.50,
+        },
+        well_depth: match server_atom.element.as_str() {
+            "C" => 0.15,
+            "N" => 0.16,
+            "O" => 0.21,
+            "H" => 0.02,
+            _ => 0.10,
+        },
+        partial_charge: server_atom.charge.unwrap_or(0.0) as f32,
+        hydrogen_bond: match server_atom.element.as_str() {
+            "O" => HydrogenBond::Acceptor,
+            "N" => HydrogenBond::Both,
+            "H" if server_atom.charge.unwrap_or(0.0) > 0.2 => HydrogenBond::Donor,
+            _ => HydrogenBond::Neither,
+        },
+    };
+
+    CoreAtom::new(
+        &server_atom.element,
+        Vector3::new(server_atom.x as f32, server_atom.y as f32, server_atom.z as f32),
+        atom_type,
+    )
+}
+
+/// Create receptor from trypsin pocket
+fn create_receptor() -> Receptor {
+    let trypsin = create_trypsin_pocket();
+    let atoms: Vec<CoreAtom> = trypsin.atoms.iter().map(|a| convert_atom(a)).collect();
+    Receptor::new(atoms, 8.0)
+}
+
+/// Create ligand from benzamidine
+fn create_ligand() -> Ligand {
+    let benzamidine = create_benzamidine();
+    let atoms: Vec<CoreAtom> = benzamidine.atoms.iter().map(|a| convert_atom(a)).collect();
+
+    // Create bonds from the molecule data
+    let num_atoms = atoms.len();
+    let mut bonds: Vec<Vec<Bond>> = vec![vec![]; num_atoms];
+
+    for bond in &benzamidine.bonds {
+        let atom1 = bond[0] as usize;
+        let atom2 = bond[1] as usize;
+
+        // Benzamidine is mostly rigid, only the amidinium group has some flexibility
+        // For simplicity, treat all bonds as rigid for now
+        bonds[atom1].push(Bond { target: atom2, is_rotatable: false });
+        bonds[atom2].push(Bond { target: atom1, is_rotatable: false });
+    }
+
+    Ligand::new(atoms, bonds, vec![])
+}
+
+/// Create search space for benzamidine-trypsin
+fn create_search_space() -> Space {
+    // Center search around Asp189 binding pocket
+    let boundaries = Boundaries {
+        center: Point3::new(14.0, 12.0, 9.0),  // Near Asp189 carboxylate
+        extents: Vector3::new(5.0, 5.0, 5.0),
+    };
+
+    // Allow full rotation
+    let rotational_space = RotationalSpace::Unconstrained;
+
+    // No conformational flexibility (rigid ligand for now)
+    let conformational_space = ConformationalSpace {
+        rotatable_bonds: vec![],
+    };
+
+    Space {
+        spatial_boundaries: boundaries,
+        rotational_space,
+        conformational_space,
+    }
+}
+
+/// CLI runner function (deprecated - use cargo test instead)
 pub fn run_benzamidine_trypsin_test() {
-    let request = create_benzamidine_trypsin_request();
-
     println!("=== Benzamidine-Trypsin Docking Test ===");
-    println!("Receptor: {} (simplified binding pocket)", request.receptor.name);
-    println!("  Atoms: {} (key residues: ASP189, SER195)", request.receptor.atoms.len());
-    println!("Ligand: {}", request.ligand.name);
-    println!("  Atoms: {}", request.ligand.atoms.len());
-    println!("  Molecular formula: C7H9N2+");
-    println!("\nExpected outcome:");
-    println!("  - Benzamidine binds in S1 specificity pocket");
-    println!("  - Salt bridge: Amidinium group <-> Asp189 carboxylate");
-    println!("  - Distance: C(NH2)2+ to COO- ~3-4 Å");
-    println!("  - Known Ki: ~20 µM (strong binding)");
-    println!("  - Reference: PDB 3PTB");
-    println!("========================================\n");
+    println!("Note: This CLI runner is deprecated. Use 'cargo test benzamidine' instead.");
+    println!("\nRunning tests programmatically...\n");
 
-    // TODO: Implement docking algorithm
-    // Commented out - implement these functions:
+    // test_benzamidine_trypsin_random_search();
+    println!();
+    // test_benzamidine_trypsin_monte_carlo();
+}
 
-    // let config = DockingConfig {
-    //     search_algorithm: SearchAlgorithm::GeneticAlgorithm,
-    //     scoring_function: ScoringFunction::AutoDockVina,
-    //     exhaustiveness: 8,
-    //     num_modes: 10,
-    //     ..Default::default()
-    // };
+#[test]
+fn test_benzamidine_trypsin_random_search() {
+    println!("\n=== Benzamidine-Trypsin Random Search Test ===");
 
-    // let result = dock(&request.receptor, &request.ligand, &config);
+    let receptor = create_receptor();
+    let ligand = create_ligand();
+    let space = create_search_space();
 
-    // println!("Docking complete!");
-    // println!("  Best score: {:.2} kcal/mol", result.score);
-    // println!("  Best pose: {:?}", result.pose);
-    // println!("  Key interactions:");
-    // for interaction in &result.interactions {
-    //     println!("    - {}: {:.2} Å", interaction.type_name, interaction.distance);
-    // }
+    println!("Receptor: Trypsin binding pocket");
+    println!("  Atoms: {} (ASP189, SER195)", receptor.atoms.len());
+    println!("Ligand: Benzamidine (C7H9N2+)");
+    println!("  Atoms: {}", ligand.atoms.len());
 
-    // Validate result
-    // assert!(result.has_salt_bridge("BEN", "ASP189"),
-    //         "Expected salt bridge between benzamidine and Asp189");
-    // assert!(result.score < -5.0,
-    //         "Expected favorable binding energy (< -5 kcal/mol)");
+    println!("\nRunning random search with 100 samples...");
+    let (_best_pose, best_score) = random_search(100, &space, &ligand, &receptor);
+
+    println!("\nResults:");
+    println!("  Total Energy: {:.3} kcal/mol", best_score.total);
+    println!("  VDW:          {:.3} kcal/mol", best_score.vdw);
+    println!("  Electrostatic: {:.3} kcal/mol", best_score.esi);
+    println!("  H-bond:       {:.3} kcal/mol", best_score.h_bond);
+    println!("  Torsional:    {:.3} kcal/mol", best_score.torsional);
+
+    // Validate that we found a reasonable energy
+    assert!(best_score.total < 0.0, "Best score should be negative (favorable binding)");
+
+    // Expect strong electrostatic attraction (positive amidinium + negative carboxylate)
+    assert!(best_score.esi < -5.0, "Should have strong electrostatic attraction for salt bridge");
+
+    println!("\n✓ Random search completed successfully");
+}
+
+#[test]
+fn test_benzamidine_trypsin_monte_carlo() {
+    println!("\n=== Benzamidine-Trypsin Monte Carlo Test ===");
+
+    let receptor = create_receptor();
+    let ligand = create_ligand();
+    let space = create_search_space();
+    let step_sizes = StepSizes::default();
+
+    println!("Receptor: Trypsin binding pocket");
+    println!("  Atoms: {} (ASP189, SER195)", receptor.atoms.len());
+    println!("Ligand: Benzamidine (C7H9N2+)");
+    println!("  Atoms: {}", ligand.atoms.len());
+
+    println!("\nRunning Monte Carlo with 2000 iterations...");
+    println!("  Temperature: 2.0 kcal/mol");
+    println!("  Step sizes: trans={:.1}Å, rot={:.0}°, tors={:.0}°",
+             step_sizes.translation, step_sizes.rotation_degrees, step_sizes.torsion_degrees);
+
+    let (_best_pose, best_score) = mc_simulated_annealing(
+        2000,
+        &space,
+        &ligand,
+        &receptor,
+        &step_sizes,
+        2.0,
+    );
+
+    println!("\nResults:");
+    println!("  Total Energy: {:.3} kcal/mol", best_score.total);
+    println!("  VDW:          {:.3} kcal/mol", best_score.vdw);
+    println!("  Electrostatic: {:.3} kcal/mol", best_score.esi);
+    println!("  H-bond:       {:.3} kcal/mol", best_score.h_bond);
+    println!("  Torsional:    {:.3} kcal/mol", best_score.torsional);
+
+    // Validate favorable binding
+    assert!(best_score.total < -5.0, "Expected strong binding (< -5 kcal/mol)");
+
+    // Salt bridge should dominate (electrostatics)
+    assert!(best_score.esi < -10.0, "Expected strong salt bridge electrostatics");
+
+    println!("\n✓ Monte Carlo search completed successfully");
+    println!("\nExpected: Salt bridge between amidinium (BEN) and Asp189 carboxylate");
+    println!("Reference: PDB 3PTB, Ki ~20 µM");
 }

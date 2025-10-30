@@ -6,6 +6,7 @@
 
 use nalgebra::Vector3;
 
+#[derive(PartialEq)]
 pub enum HydrogenBond {
     Donor,
     Acceptor,
